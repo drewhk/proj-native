@@ -189,6 +189,7 @@ set(SRC_LIBPROJ_ISO19111
 )
 
 set(SRC_LIBPROJ_CORE
+  extensions.cpp
   aasincos.cpp
   adjlon.cpp
   area.cpp
@@ -280,6 +281,7 @@ endif()
 set_property(SOURCE ${SKIP_UNITY_BUILD_FILES} PROPERTY SKIP_UNITY_BUILD_INCLUSION ON)
 
 set(HEADERS_LIBPROJ
+  proj_extensions.h
   proj.h
   proj_experimental.h
   proj_constants.h

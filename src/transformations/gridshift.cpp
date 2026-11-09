@@ -35,6 +35,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "extensions.hpp"
 #include "grids.hpp"
 #include "proj/internal/internal.hpp"
 #include "proj_internal.h"
@@ -69,6 +70,7 @@ struct GridInfo {
     int idxSampleZ = -1;
     bool eastingNorthingOffset = false;
     bool bilinearInterpolation = true;
+    PROJ_EXT_INTERPOLATE customInterpolation = nullptr;
     std::vector<float> shifts{};
     bool swapXYInRes = false;
     std::vector<int> idxSampleXYZ{-1, -1, -1};
@@ -341,13 +343,17 @@ PJ_XYZ gridshiftData::grid_interpolate(PJ_CONTEXT *ctx, const std::string &type,
         if (interpolation.empty())
             interpolation = "bilinear";
 
-        if (interpolation != "bilinear" && interpolation != "biquadratic") {
+        const auto customInterpolation =
+            pj_ext_find_interpolator(interpolation.c_str());
+        if (interpolation != "bilinear" && interpolation != "biquadratic" &&
+            !customInterpolation) {
             pj_log(ctx, PJ_LOG_ERROR,
                    "gridshift: Unsupported interpolation_method in grid");
             return val;
         }
 
         GridInfo gridInfo;
+        gridInfo.customInterpolation = customInterpolation;
         gridInfo.idxSampleX = idxSampleX;
         gridInfo.idxSampleY = idxSampleY;
         gridInfo.idxSampleZ = m_skip_z_transform ? -1 : idxSampleZ;
@@ -378,6 +384,39 @@ PJ_XYZ gridshiftData::grid_interpolate(PJ_CONTEXT *ctx, const std::string &type,
     const int idxSampleX = gridInfo.idxSampleX;
     const int idxSampleY = gridInfo.idxSampleY;
     const int idxSampleZ = gridInfo.idxSampleZ;
+    if (gridInfo.customInterpolation) {
+        // Request only the active bands, in XYZ order. Unit/sign handling and
+        // the existing iterative inverse remain the responsibility of
+        // gridshift. Never inherit the biquadratic-only approximate inverse for
+        // callbacks.
+        biquadraticInterpolationOut = false;
+        const int slots[] = {idxSampleX, idxSampleY, idxSampleZ};
+        int bands[3];
+        int count = 0;
+        for (int band : slots) {
+            if (band >= 0)
+                bands[count++] = band;
+        }
+        if (count == 0)
+            return PJ_XYZ{0, 0, 0};
+        double values[3];
+        if (pj_ext_interpolate(ctx, gridInfo.customInterpolation, grid, xy.x,
+                               xy.y, count, bands, values))
+            return val;
+        double xyz[3] = {0, 0, 0};
+        int j = 0;
+        for (int i = 0; i < 3; ++i) {
+            if (slots[i] >= 0)
+                xyz[i] = values[j++];
+        }
+        if (idxSampleX >= 0 && idxSampleY >= 0 &&
+            !gridInfo.eastingNorthingOffset) {
+            constexpr double convFactorXY = 1. / 3600 / 180 * M_PI;
+            xyz[0] *= convFactorXY;
+            xyz[1] *= convFactorXY;
+        }
+        return PJ_XYZ{xyz[0], xyz[1], xyz[2]};
+    }
     const bool bilinearInterpolation = gridInfo.bilinearInterpolation;
     biquadraticInterpolationOut = !bilinearInterpolation;
 
@@ -662,6 +701,7 @@ PJ_XYZ gridshiftData::grid_apply_internal(
         const double toltol = TOL * TOL;
         PJ_XY diff;
         do {
+            const int previousError = proj_context_errno(ctx);
             shift = grid_interpolate(ctx, type, guess, grid,
                                      biquadraticInterpolationOut);
             if (grid->hasChanged()) {
@@ -685,6 +725,13 @@ PJ_XYZ gridshiftData::grid_apply_internal(
                        grid->name().c_str(), newGrid->name().c_str());
                 grid = newGrid;
                 normalized_in = normalizeX(grid, in, extent);
+                // A custom interpolator reports a missed stencil explicitly.
+                // This miss is recoverable because we found another grid.
+                // Restore the incoming error state; do not swallow other
+                // callback failures (nodata, I/O, etc.) while retrying.
+                if (proj_context_errno(ctx) ==
+                    PROJ_ERR_COORD_TRANSFM_OUTSIDE_GRID)
+                    proj_context_errno_set(ctx, previousError);
                 diff.x = std::numeric_limits<double>::max();
                 diff.y = std::numeric_limits<double>::max();
                 continue;
@@ -956,7 +1003,8 @@ PJ *PJ_TRANSFORMATION(gridshift, 0) {
         const char *interpolation =
             pj_param(P->ctx, P->params, "sinterpolation").s;
         if (strcmp(interpolation, "bilinear") == 0 ||
-            strcmp(interpolation, "biquadratic") == 0) {
+            strcmp(interpolation, "biquadratic") == 0 ||
+            pj_ext_find_interpolator(interpolation)) {
             Q->m_interpolation = interpolation;
         } else {
             proj_log_error(P, _("Unsupported value for +interpolation."));

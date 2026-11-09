@@ -34,6 +34,7 @@
 #include <string.h>
 
 #include "filemanager.hpp"
+#include "extensions.hpp"
 #include "geodesic.h"
 #include "proj.h"
 #include "proj_internal.h"
@@ -427,7 +428,7 @@ static PJ_CONSTRUCTOR locate_constructor(const char *name) {
     for (i = 0; (s = operations[i].id) && strcmp(name, s); ++i)
         ;
     if (nullptr == s)
-        return nullptr;
+        return pj_ext_find_operation(name);
     return (PJ_CONSTRUCTOR)operations[i].proj;
 }
 
