@@ -6,7 +6,8 @@
 #include "proj.h"
 #include "proj_internal.h"
 
-PROJ_HEAD(somerc, "Swiss. Obl. Mercator") "\n\tCyl, Ell\n\tFor CH1903";
+PROJ_HEAD(somerc, "Swiss. Obl. Mercator")
+"\n\tCyl, Ell\n\tFor CH1903; optional spherical centre latc=";
 
 namespace { // anonymous namespace
 struct pj_somerc {
@@ -88,6 +89,32 @@ PJ *PJ_PROJECTION(somerc) {
            Q->c * (log(tan(M_FORTPI + 0.5 * P->phi0)) -
                    Q->hlf_e * log((1. + sp) / (1. - sp)));
     Q->kR = P->k0 * sqrt(P->one_es) / (1. - sp * sp);
+
+    // The normal parallel (lat_0) determines the ellipsoid-to-sphere
+    // mapping above. An independent spherical centre changes only the
+    // subsequent rotation, in both the forward and inverse projection.
+    // In particular, K must retain the normal parallel's spherical latitude.
+    if (pj_param(P->ctx, P->params, "tlatc").i) {
+        const char *text = pj_param(P->ctx, P->params, "slatc").s;
+        const char *number = text;
+        if (*number == '+' || *number == '-')
+            ++number;
+        char *end = nullptr;
+        const double latc = dmstor_ctx(P->ctx, text, &end);
+        // The legacy angle parser accepts a numeric prefix (or even none).
+        // Do not silently turn malformed centre latitudes into zero.
+        if (!((*number >= '0' && *number <= '9') || *number == '.') ||
+            end == text || *end != '\0' || !std::isfinite(latc) ||
+            fabs(latc) > M_HALFPI) {
+            proj_log_error(P, _("Invalid value for latc: expected an angle "
+                                "within +/-90 degrees"));
+            return pj_default_destructor(P,
+                                         PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+        }
+        Q->sinp0 = sin(latc);
+        Q->cosp0 = cos(latc);
+    }
+
     P->inv = somerc_e_inverse;
     P->fwd = somerc_e_forward;
     return P;
