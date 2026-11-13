@@ -152,19 +152,32 @@ void proj_context_inherit(PJ *parent, PJ *child) {
 /*****************************************************************************/
 char *pj_chomp(char *c) {
     /******************************************************************************
-    Strip pre- and postfix whitespace. Inline comments (indicated by '#') are
-    considered whitespace.
+    Strip pre- and postfix whitespace. Inline comments (indicated by '#' outside
+    a quoted parameter value) are considered whitespace.
     ******************************************************************************/
     size_t i, n;
-    char *comment;
     char *start = c;
 
     if (nullptr == c)
         return nullptr;
 
-    comment = strchr(c, '#');
-    if (comment)
-        *comment = 0;
+    // Match the quoted-value syntax used by pj_shrink/pj_trim_argc. In
+    // particular, a DMS seconds mark must not hide a following comment.
+    bool in_string = false;
+    for (i = 0; c[i]; i++) {
+        if (in_string) {
+            if (c[i] == '"' && c[i + 1] == '"') {
+                i++;
+            } else if (c[i] == '"') {
+                in_string = false;
+            }
+        } else if (c[i] == '"' && i > 0 && c[i - 1] == '=') {
+            in_string = true;
+        } else if (c[i] == '#') {
+            c[i] = 0;
+            break;
+        }
+    }
 
     n = strlen(c);
     if (0 == n)
@@ -368,7 +381,7 @@ char **pj_trim_argv(size_t argc, char *args) {
 /*****************************************************************************/
 std::string pj_double_quote_string_param_if_needed(const std::string &str) {
     /*****************************************************************************/
-    if (str.find(' ') == std::string::npos) {
+    if (str.find_first_of(" #") == std::string::npos) {
         return str;
     }
     std::string ret;

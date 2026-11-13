@@ -42,6 +42,49 @@ namespace {
 
 // ---------------------------------------------------------------------------
 
+TEST(gie, comments_outside_quoted_parameter_values) {
+    char quoted[] =
+        "  +title=\"survey #2/geo\"\"id\" +proj=noop # ignored \"quote\"  ";
+    EXPECT_STREQ(pj_chomp(quoted), "+title=\"survey #2/geo\"\"id\" +proj=noop");
+
+    char unquoted[] = "+proj=noop # ordinary comment";
+    EXPECT_STREQ(pj_chomp(unquoted), "+proj=noop");
+
+    // A DMS seconds mark is not the start of a quoted parameter value.
+    char angle[] = "+lon_0=2d20'14.025\"E # comment";
+    EXPECT_STREQ(pj_chomp(angle), "+lon_0=2d20'14.025\"E");
+}
+
+TEST(gie, quoted_hash_survives_argument_roundtrip) {
+    char input[] = "+proj=noop +title=\"survey#2\" +remarks=\"geo\"\"#id\"";
+    const auto argc = pj_trim_argc(input);
+    ASSERT_EQ(argc, 3U);
+    char **argv = pj_trim_argv(argc, input);
+    ASSERT_NE(argv, nullptr);
+    EXPECT_STREQ(argv[1], "title=survey#2");
+    EXPECT_STREQ(argv[2], "remarks=geo\"#id");
+
+    // Pipeline construction rebuilds strings from already unquoted arguments.
+    char *rebuilt = pj_make_args(argc, argv);
+    free(argv);
+    ASSERT_NE(rebuilt, nullptr);
+    EXPECT_STREQ(rebuilt,
+                 "proj=noop title=\"survey#2\" remarks=\"geo\"\"#id\"");
+    free(rebuilt);
+}
+
+TEST(gie, quoted_hash_preserves_following_pipeline_steps) {
+    PJ *P = proj_create(PJ_DEFAULT_CTX, "+proj=pipeline +step +proj=affine "
+                                        "+title=\"survey#2\" +xoff=5 "
+                                        "+step +proj=affine +yoff=7 # comment");
+    ASSERT_NE(P, nullptr);
+    const auto result = proj_trans(P, PJ_FWD, proj_coord(1, 2, 3, 0));
+    EXPECT_DOUBLE_EQ(result.xyz.x, 6);
+    EXPECT_DOUBLE_EQ(result.xyz.y, 9);
+    EXPECT_DOUBLE_EQ(result.xyz.z, 3);
+    proj_destroy(P);
+}
+
 TEST(gie, cart_selftest) {
     PJ_CONTEXT *ctx;
     PJ *P;
